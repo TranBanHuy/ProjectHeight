@@ -1,0 +1,799 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Child Height Predictor (with ML correction)</title>
+  <style>
+    
+    :root{--bg:#f6f8fb;--card:#fff;--accent:#186fa3;--muted:#6b7280}
+    body{font-family:Inter,system-ui,Segoe UI,Arial; margin:0; background:linear-gradient(180deg,#eef6fc,white); color:#0f172a}
+    .wrap{max-width:980px;margin:20px auto;padding:18px}
+    header{display:flex;gap:12px;align-items:center}
+    h1{margin:0;font-size:20px}
+    .card{background:var(--card);border-radius:12px;padding:14px;box-shadow:0 6px 18px rgba(12,23,40,0.06);margin-top:12px}
+    label{display:block;font-size:13px;color:var(--muted);margin-bottom:6px}
+    .row{display:flex;gap:12px;flex-wrap:wrap}
+    input[type="number"],input[type="text"],select,textarea{padding:9px;border-radius:8px;border:1px solid #e6eef6;min-width:150px}
+    button{background:var(--accent);color:white;border:none;padding:9px 12px;border-radius:8px;cursor:pointer}
+    button.secondary{background:#e6eef6;color:#0f172a}
+    .tiny{font-size:12px;color:var(--muted)}
+    .flex-between{display:flex;justify-content:space-between;align-items:center}
+    table{width:100%;border-collapse:collapse;margin-top:12px}
+    th,td{padding:8px;border-bottom:1px solid #eef2f7;text-align:left;font-size:13px}
+    .muted{color:var(--muted)}
+    .chip{padding:6px 8px;border-radius:999px;background:#f2f7fb;color:#0f172a;border:1px solid #e6eef6;font-size:13px}
+    .info{font-size:13px;background:#f8fafc;padding:10px;border-radius:8px;margin-top:10px;border:1px solid #eef4fb}
+    .method-info{font-size:13px;margin-top:8px;color:#0b1722}
+    .inline-help{font-size:12px;color:var(--muted);margin-left:8px}
+    .small{font-size:12px}
+    .spacer{ height:16px; }
+    footer{margin-top:14px;color:var(--muted);font-size:13px}
+    @media (max-width:720px){ .row{flex-direction:column} input[type="number"],select{width:100%} }
+
+    /* Tooltip floating popup (absolute) */
+    .info-wrapper { position:relative; display:inline-flex; align-items:center; margin-left:8px; }
+    .info-icon {
+      display:inline-block;
+      width:16px;
+      height:16px;
+      border-radius:50%;
+      background:var(--accent);
+      color:white;
+      font-size:12px;
+      line-height:16px;
+      text-align:center;
+      cursor:pointer;
+      user-select:none;
+    }
+    .info-box {
+      display:none;
+      position:absolute;
+      top:22px;
+      right:0;
+      z-index:120;
+      background:#f8fafc;
+      border:1px solid #e6eef6;
+      padding:10px;
+      font-size:12px;
+      border-radius:6px;
+      color:#0f172a;
+      width:300px;
+      box-shadow:0 6px 18px rgba(0,0,0,0.08);
+    }
+    .info-toggle { display:none; }
+    .info-toggle:checked + label .info-box { display:block; }
+
+    .ml-status { margin-top:8px; font-size:13px; color:#0b1722; }
+    .ml-controls { display:flex; gap:8px; align-items:center; margin-top:6px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <img src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='44' height='44'><rect rx='8' width='44' height='44' fill='%23186fa3'/><text x='50%' y='50%' text-anchor='middle' alignment-baseline='central' font-size='20' fill='white'>H</text></svg>" alt="logo"/>
+      <div>
+        <h1>Child Height Predictor</h1>
+        <div class="tiny">WHO growth reference (2006/2007) for SDS; parent-based regressions; child-based prediction; ML correction available.</div>
+      </div>
+    </header>
+
+    <div class="card">
+      <div class="flex-between">
+        <strong>Prediction inputs</strong>
+        <div class="tiny">Units: <span id="displayUnits">cm</span></div>
+      </div>
+
+      <div class="row" style="margin-top:10px">
+        <div>
+          <label>Units</label>
+          <select id="unitSelect">
+            <option value="metric">Metric (cm)</option>
+            <option value="imperial">Imperial (ft/in)</option>
+          </select>
+        </div>
+
+        <div>
+          <label>Child sex</label>
+          <select id="childSex">
+            <option value="male">Male (boy)</option>
+            <option value="female">Female (girl)</option>
+          </select>
+        </div>
+
+        <!-- Prediction method with tooltip -->
+        <div>
+          <label style="display:flex; align-items:center;">
+            Prediction method (parent-based)
+
+            <input id="methodInfoToggle" type="checkbox" class="info-toggle">
+            <label for="methodInfoToggle" style="margin-left:6px; cursor:pointer;">
+              <span class="info-wrapper">
+                <span class="info-icon">?</span>
+                <span class="info-box">
+                  <strong>Tanner (classic)</strong><br>
+                  • Uses mid-parental height: (father + mother ± 13) / 2. Simple, older method.<br><br>
+                  <strong>mul108</strong> (mother ×1.08 → regression)<br>
+                  • Convert mother, average with father, then Y = 0.79X + 36. More accurate.<br><br>
+                  <strong>mul1066</strong> (mother ×1.066 → regression)<br>
+                  • Slightly different fit (Y = 0.80X + 35). Useful variant depending on population.
+                </span>
+              </span>
+            </label>
+          </label>
+          <select id="method">
+            <option value="tanner">Tanner (classic)</option>
+            <option value="mul108">Improved — ×1.08 (Y=0.79X+36)</option>
+            <option value="mul1066">Improved — ×1.066 (Y=0.80X+35)</option>
+          </select>
+        </div>
+
+        <div>
+          <label>Age correction (parents)</label>
+          <select id="ageCorr">
+            <option value="none">None (use measured parent heights)</option>
+            <option value="approx">Approx shrinkage-correction (if parent &gt;30 y)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="spacer"></div>
+
+      <div class="row">
+        <div>
+          <label>Father height</label>
+          <input id="fatherHeight" type="number" step="0.1" placeholder="cm or in">
+        </div>
+        <div>
+          <label>Father age (years)</label>
+          <input id="fatherAge" type="number" min="18" step="1">
+        </div>
+        <div>
+          <label>Mother height</label>
+          <input id="motherHeight" type="number" step="0.1" placeholder="cm or in">
+        </div>
+        <div>
+          <label>Mother age (years)</label>
+          <input id="motherAge" type="number" min="18" step="1">
+        </div>
+      </div>
+
+      <div class="spacer"></div>
+
+      <div class="row" style="position:relative;">
+        <div>
+          <label>Child current age (years, decimal)</label>
+          <input id="childAge" type="number" step="0.01" min="0">
+        </div>
+
+        <div>
+          <label>Child current height</label>
+          <input id="childHeight" type="number" step="0.1" placeholder="cm or in">
+        </div>
+
+        <div>
+          <label style="display:flex; align-items:center;">
+            Weight of child-based prediction (auto)
+
+            <input id="weightInfoToggle" class="info-toggle" type="checkbox" />
+            <label for="weightInfoToggle" style="margin-left:6px; cursor:pointer;">
+              <span class="info-wrapper">
+                <span class="info-icon">?</span>
+                <span class="info-box">
+                  <strong>What is weight override?</strong><br><br>
+                  Controls how much final prediction relies on child's current height vs parents'.<br><br>
+                  <strong>w = 0</strong> → parents only.<br>
+                  <strong>w = 1</strong> → child only.<br>
+                  Leave blank to use automatic age-based weighting.
+                </span>
+              </span>
+            </label>
+          </label>
+
+          <input id="weightOverride" type="number" step="0.01" min="0" max="1" placeholder="0 - 1">
+
+        </div>
+      </div>
+
+      <!-- General description BELOW row, aligned -->
+      <div class="row" style="margin-top:6px; align-items:flex-start;">
+        <div class="tiny">Site auto-assigns weight based on age (older → more weight to child).</div>
+        <div></div>
+        <div class="tiny" style="text-align:right;">Leave blank for auto.</div>
+      </div>
+
+      <div style="margin-top:10px" class="row">
+        <button id="predictBtn">Predict (blend)</button>
+        <button id="clearBtn" class="secondary">Clear</button>
+        <div style="margin-left:auto" class="tiny">WHO 2006/2007 reference used when available; otherwise fallback approximate estimation.</div>
+      </div>
+
+      <div class="info" id="whoStatus">WHO data: <span id="whoMessage">loading WHO tables...</span> — <a href="https://www.who.int/tools/growth-reference-data-for-5to19-years" target="_blank">WHO source</a></div>
+
+      <div id="result" style="display:none;margin-top:12px" class="card">
+        <div class="flex-between">
+          <div>
+            <div><strong>Final predicted adult height: <span id="finalPred"></span></strong></div>
+            <div id="blendInfo" class="tiny"></div>
+          </div>
+          <div style="text-align:right">
+            <div class="tiny">Parent-only prediction (for comparison)</div>
+            <div id="parentPred" style="font-weight:600"></div>
+          </div>
+        </div>
+
+        <div class="method-info" id="methodExplanations"></div>
+
+        <!-- ML controls and display -->
+        <div class="ml-controls">
+          <input id="enableML" type="checkbox" />
+          <label for="enableML" class="tiny">Enable regression correction (learn from saved real heights)</label>
+
+          <input id="mlInfoToggle" class="info-toggle" type="checkbox" />
+          <label for="mlInfoToggle" style="margin-left:6px; cursor:pointer;">
+            <span class="info-wrapper">
+              <span class="info-icon">?</span>
+              <span class="info-box">
+                <strong>What is regression correction?</strong><br><br>
+                The site fits a simple linear model: <br>
+                <em>real adult height = a + b × predicted height</em><br><br>
+                If you enable correction and there are at least 2 saved real heights, the learned model will produce a separate ML-corrected prediction shown below. This helps adjust systematic bias in the formula-based prediction.
+              </span>
+            </span>
+          </label>
+        </div>
+
+        <div id="mlStatus" class="ml-status" style="display:none;"></div>
+
+        <div id="mlCorrected" style="margin-top:8px; display:none;">
+          <strong>ML-corrected adult height:</strong> <span id="mlPred"></span>
+          <div class="tiny" id="mlInfoText"></div>
+        </div>
+
+        <div style="margin-top:10px">
+          <div class="tiny">If you later obtain the child's adult height, record it below to store the result and track deviations.</div>
+          <div style="margin-top:8px" class="row">
+            <div>
+              <label>Real adult height (optional)</label>
+              <input id="realHeight" type="number" step="0.1" placeholder="cm or in">
+            </div>
+            <div style="min-width:220px">
+              <label>Health information (optional)</label>
+              <select id="healthInfo">
+                <option value="nothing">Nothing / don't know</option>
+                <option value="health">Health problem</option>
+                <option value="syndrome">Syndrome</option>
+              </select>
+            </div>
+            <div style="align-self:end">
+              <button id="saveRecord">Save record</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div> <!-- end main card -->
+
+    <div class="card" style="margin-top:12px">
+      <div class="flex-between"><strong>Stored records</strong><div class="tiny">Local only (browser). Export CSV available.</div></div>
+      <div style="margin-top:8px" class="row">
+        <label class="chip small">Sort:
+          <select id="sortBy" class="small">
+            <option value="date_desc">Date (new→old)</option>
+            <option value="date_asc">Date (old→new)</option>
+            <option value="diff_desc">Deviation (largest→smallest)</option>
+            <option value="diff_asc">Deviation (smallest→largest)</option>
+          </select>
+        </label>
+        <label class="chip small"><input type="checkbox" id="hideHealth"> Hide health / syndrome</label>
+        <button id="exportCsv" class="secondary">Export CSV</button>
+        <button id="clearStorage" class="secondary">Clear stored</button>
+      </div>
+
+      <div id="recordsList" style="margin-top:10px">
+        <table><thead><tr><th>Date</th><th>Method</th><th>FinalPred</th><th>ParentPred</th><th>Real</th><th>Diff</th><th>Health</th><th>Notes</th></tr></thead><tbody id="recordsBody"></tbody></table>
+      </div>
+    </div>
+
+    <footer class="card">
+      <div><strong>Sources & notes</strong></div>
+      <div class="tiny" style="margin-top:6px">
+        WHO child growth reference 2006/2007 (height-for-age tables).<br>
+        Child-based prediction: regression of child SDS to adult SDS using age-specific correlation (Cole & Wright 2011).<br>
+        Parent-based improved regression from the research article: <a href="https://www.researchgate.net/publication/382809553_Accurate_Prediction_of_Children's_Target_Height_from_Their_Mid-Parental_Height" target="_blank">Accurate Prediction of Children’s Target Height from Their Mid-Parental Height</a> (Zeevi et al., 2024).
+      </div>
+    </footer>
+
+  </div> <!-- wrap -->
+
+  <!-- include SheetJS for WHO XLSX parsing (if accessible) -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+  <!-- FULL SCRIPT -->
+  <script>
+  (function(){
+
+    const $ = id => document.getElementById(id);
+    const unitSelect = $('unitSelect');
+    const displayUnits = $('displayUnits');
+    const predictBtn = $('predictBtn');
+    const clearBtn = $('clearBtn');
+    const whoMessage = $('whoMessage');
+    const resultDiv = $('result');
+    const finalPred = $('finalPred');
+    const parentPred = $('parentPred');
+    const blendInfo = $('blendInfo');
+    const methodExplanations = $('methodExplanations');
+
+    const enableMLBox = $('enableML');
+    const mlStatus = $('mlStatus');
+    const mlPred = $('mlPred');
+    const mlCorrected = $('mlCorrected');
+    const mlInfoText = $('mlInfoText');
+
+    const STORAGE_KEY = "height_predictor_records_v2";
+
+    const COEFS = {
+      mul108: { multiplier:1.08, a:0.79, b:36 },
+      mul1066: { multiplier:1.066, a:0.80, b:35 }
+    };
+
+    const WHO_BOYS_XLSX =
+      "https://cdn.who.int/media/docs/default-source/child-growth-reference-data/hfa/boys_hfa_zscores_expanded.xlsx";
+    const WHO_GIRLS_XLSX =
+      "https://cdn.who.int/media/docs/default-source/child-growth-reference-data/hfa/girls_hfa_zscores_expanded.xlsx";
+
+    let WHO_TABLES = { loaded:false, boys:null, girls:null };
+
+    // helpers
+    function toCm(v, unit){
+      if (!v || isNaN(v)) return null;
+      return unit === "imperial" ? Number(v) * 2.54 : Number(v);
+    }
+    function fromCmTxt(v, unit){
+      if (v == null || isNaN(v)) return "—";
+      if (unit === "imperial"){
+        const inches = Number(v)/2.54;
+        const ft = Math.floor(inches/12);
+        const rem = (inches % 12).toFixed(1);
+        return `${ft}ft ${rem}in (${inches.toFixed(1)} in)`;
+      }
+      return `${Number(v).toFixed(1)} cm`;
+    }
+
+    function autoWeight(age){
+      if (age <= 0) return 0;
+      if (age < 2) return 0.06*age;
+      if (age < 4) return 0.15 + (0.15)*(age-2)/2;
+      if (age < 8) return 0.3 + (0.25)*(age-4)/4;
+      if (age < 12) return 0.55 + (0.20)*(age-8)/4;
+      if (age < 15) return 0.75 + (0.15)*(age-12)/3;
+      if (age < 18) return 0.9 + 0.1*(age-15)/3;
+      return 1;
+    }
+
+    function corrR(age){
+      if (age <= 0) return 0.25;
+      if (age < 2) return 0.3 + 0.05*age;
+      if (age < 5) return 0.4 + 0.08*(age-2);
+      if (age < 10) return 0.64 + 0.07*(age-5);
+      if (age < 15) return 0.95;
+      return 0.95;
+    }
+
+    function heightToZ(h,L,M,S){
+      if (L===0) return Math.log(h/M)/S;
+      return (Math.pow(h/M, L) - 1)/(L*S);
+    }
+    function zToHeight(z,L,M,S){
+      if (L===0) return M * Math.exp(S*z);
+      return M * Math.pow(1 + L*S*z, 1/L);
+    }
+
+    async function fetchWHO(){
+      whoMessage.textContent = "loading WHO tables...";
+      try{
+        const [bRes, gRes] = await Promise.all([
+          fetch(WHO_BOYS_XLSX),
+          fetch(WHO_GIRLS_XLSX)
+        ]);
+        if (!bRes.ok || !gRes.ok) throw "network";
+
+        const bBuf = await bRes.arrayBuffer();
+        const gBuf = await gRes.arrayBuffer();
+
+        const bWb = XLSX.read(bBuf,{type:"array"});
+        const gWb = XLSX.read(gBuf,{type:"array"});
+
+        function parseWB(wb){
+          for (const name of wb.SheetNames){
+            const sheet = wb.Sheets[name];
+            const js = XLSX.utils.sheet_to_json(sheet, {header:1});
+            const hdr = (js[0]||[]).map(x=>String(x||"").toLowerCase());
+            const ageIdx = hdr.findIndex(h=>h.includes("age"));
+            const lIdx = hdr.findIndex(h=>h==="l" || h.startsWith("l "));
+            const mIdx = hdr.findIndex(h=>h==="m" || h.startsWith("m "));
+            const sIdx = hdr.findIndex(h=>h==="s" || h.startsWith("s "));
+
+            if (ageIdx>=0 && lIdx>=0 && mIdx>=0 && sIdx>=0){
+              const arr=[];
+              for (let r=1;r<js.length;r++){
+                const row = js[r];
+                const A = Number(row[ageIdx]);
+                const L = parseFloat(row[lIdx]);
+                const M = parseFloat(row[mIdx]);
+                const S = parseFloat(row[sIdx]);
+                if (!isNaN(A)&&!isNaN(L)&&!isNaN(M)&&!isNaN(S))
+                  arr.push({ageMonths:A,L,M,S});
+              }
+              if (arr.length) return arr;
+            }
+          }
+          return null;
+        }
+
+        WHO_TABLES = {
+          loaded:true,
+          boys: parseWB(bWb),
+          girls: parseWB(gWb)
+        };
+        whoMessage.textContent = "WHO tables loaded.";
+      }
+      catch(e){
+        whoMessage.textContent = "WHO unavailable; approx mode.";
+        WHO_TABLES.loaded=false;
+      }
+    }
+
+    function lookupLMS(ageM, sex){
+      if (!WHO_TABLES.loaded) return null;
+      const arr = (sex==="male") ? WHO_TABLES.boys : WHO_TABLES.girls;
+      if (!arr) return null;
+
+      let i=0;
+      while(i<arr.length && arr[i].ageMonths < ageM) i++;
+
+      if (i===0) return arr[0];
+      if (i>=arr.length) return arr[arr.length-1];
+
+      const a = arr[i-1], b = arr[i];
+      const t = (ageM - a.ageMonths) / ((b.ageMonths - a.ageMonths)||1);
+
+      return {
+        ageMonths:ageM,
+        L: a.L+(b.L-a.L)*t,
+        M: a.M+(b.M-a.M)*t,
+        S: a.S+(b.S-a.S)*t
+      };
+    }
+
+    function approxZ(h, age, sex){
+      const median = (sex==="male") ? 176 : 163;
+      const childMedian = median * Math.min(age,18)/18;
+      const sd = Math.max(4.2, childMedian*0.025);
+      return (h - childMedian)/sd;
+    }
+
+    function computeParent({father,mother,method,ageCorr,sex}){
+      if (!father || !mother) return {error:"Please enter both parents."};
+
+      let fa = father, mo = mother;
+      if (ageCorr==="approx"){
+        if (Number($('fatherAge').value)>30)
+          fa += (Number($('fatherAge').value)-30)*0.03;
+        if (Number($('motherAge').value)>30)
+          mo += (Number($('motherAge').value)-30)*0.04;
+      }
+
+      if (method==="tanner"){
+        const add = (sex==="male"?13:-13);
+        const mp = (fa + mo + add)/2;
+        return {
+          predicted: mp,
+          desc: "Tanner classic mid-parental height."
+        };
+      }
+
+      const cfg = COEFS[method];
+      const moC = mo * cfg.multiplier;
+      const mp = (fa + moC)/2;
+      return {
+        predicted: cfg.a*mp + cfg.b,
+        desc: `Improved: mother×${cfg.multiplier}, regression Y=${cfg.a}X+${cfg.b}.`
+      };
+    }
+
+    function computeChild({childHt,childAge,sex,father,mother}){
+      if (!childHt || !childAge)
+        return {error:"Need child age + height."};
+
+      const ageM = Math.round(childAge*12);
+      const lms = lookupLMS(ageM,sex);
+
+      const childZ = lms
+        ? heightToZ(childHt,lms.L,lms.M,lms.S)
+        : approxZ(childHt,childAge,sex);
+
+      const add = (sex==="male"?13:-13);
+      const mp = (father + mother + add)/2;
+
+      const adultLMS = lookupLMS(216, sex);
+      const parentSDS = adultLMS
+        ? heightToZ(mp, adultLMS.L, adultLMS.M, adultLMS.S)
+        : (mp - ((sex==="male")?176:163))/(((sex==="male")?176:163)*0.025);
+
+      const r = corrR(childAge);
+      const adultSDS = r*childZ + (1-r)*parentSDS;
+
+      const adultH = adultLMS
+        ? zToHeight(adultSDS, adultLMS.L, adultLMS.M, adultLMS.S)
+        : (((sex==="male")?176:163) + adultSDS*((sex==="male"?176:163)*0.025));
+
+      return {
+        predicted: adultH,
+        desc: `Child SDS → adult SDS via r(age)=${r.toFixed(2)}`
+      };
+    }
+
+    // ------------------------------
+    // SIMPLE LINEAR REGRESSION (Option 1)
+    // ------------------------------
+    function trainSimpleLinear(){
+      // Uses records with realCm (not null) and finalPred numeric
+      const recs = loadRecords().filter(r => r.realCm !== null && r.finalPred !== null && !isNaN(r.finalPred));
+      if (recs.length < 2) return null;
+
+      // x = predicted (finalPred), y = realCm
+      const xs = recs.map(r => Number(r.finalPred));
+      const ys = recs.map(r => Number(r.realCm));
+      const n = xs.length;
+      const xmean = xs.reduce((s,v)=>s+v,0)/n;
+      const ymean = ys.reduce((s,v)=>s+v,0)/n;
+
+      let num = 0, den = 0;
+      for (let i=0;i<n;i++){
+        num += (xs[i]-xmean)*(ys[i]-ymean);
+        den += (xs[i]-xmean)*(xs[i]-xmean);
+      }
+      if (den === 0) return null;
+      const b = num / den;
+      const a = ymean - b * xmean;
+
+      // compute R^2 (optional)
+      let ssRes = 0, ssTot = 0;
+      for (let i=0;i<n;i++){
+        const yhat = a + b * xs[i];
+        ssRes += (ys[i] - yhat)*(ys[i] - yhat);
+        ssTot += (ys[i] - ymean)*(ys[i] - ymean);
+      }
+      const r2 = ssTot === 0 ? 1 : 1 - ssRes/ssTot;
+
+      return { a, b, r2, n };
+    }
+
+    // ---------------------------------------------
+    // BLEND + SDS DEVIATION OPTION C + ML correction
+    // ---------------------------------------------
+    function computeBlend(){
+      const unit = unitSelect.value;
+      const father = toCm($('fatherHeight').value, unit);
+      const mother = toCm($('motherHeight').value, unit);
+      const method = $('method').value;
+      const ageCorr = $('ageCorr').value;
+      const sex = $('childSex').value;
+      const childAge = parseFloat($('childAge').value);
+      const childHt = toCm($('childHeight').value, unit);
+
+      const wOverride = parseFloat($('weightOverride').value);
+      const w = (!isNaN(wOverride)&&wOverride>=0&&wOverride<=1)
+        ? wOverride
+        : autoWeight(childAge||0);
+
+      const p = computeParent({father,mother,method,ageCorr,sex});
+      if (p.error){ alert(p.error); return; }
+
+      const c = computeChild({childHt,childAge,sex,father,mother});
+
+      let finalVal, methodDesc;
+      if (c.error){
+        finalVal = p.predicted;
+        methodDesc = p.desc;
+      } else {
+        finalVal = w*c.predicted + (1-w)*p.predicted;
+        methodDesc = p.desc + " + " + c.desc + ` (w=${w.toFixed(2)})`;
+      }
+
+      // -----------------------------
+      // Deviation = ±1.2 SD in SDS (Option C)
+      // -----------------------------
+      let deviation=null, lower=null, upper=null;
+      try{
+        const adultLMS = lookupLMS(216, sex);
+        if (adultLMS){
+          const zFinal = heightToZ(finalVal,adultLMS.L,adultLMS.M,adultLMS.S);
+          lower = zToHeight(zFinal-1.2, adultLMS.L,adultLMS.M,adultLMS.S);
+          upper = zToHeight(zFinal+1.2, adultLMS.L,adultLMS.M,adultLMS.S);
+          deviation = Math.abs(upper-finalVal);
+        }
+        else {
+          const median = (sex==="male") ? 176 : 163;
+          const sd = Math.max(4.2, median*0.025);
+          deviation = 1.2 * sd;
+          lower = finalVal - deviation;
+          upper = finalVal + deviation;
+        }
+      } catch(e){
+        deviation=null; lower=null; upper=null;
+      }
+
+      // --------------- DISPLAY ---------------
+      resultDiv.style.display="block";
+
+      if (lower != null && upper != null && deviation != null){
+        finalPred.textContent =
+          `${fromCmTxt(finalVal,unit)} (range: ${fromCmTxt(lower,unit)} – ${fromCmTxt(upper,unit)}, ±${deviation.toFixed(1)} cm)`;
+      } else {
+        finalPred.textContent = fromCmTxt(finalVal,unit);
+      }
+
+      parentPred.textContent = fromCmTxt(p.predicted,unit);
+
+      blendInfo.textContent = c.error
+        ? "Child data incomplete — parent-based only."
+        : `Blended parent + child (w=${w.toFixed(2)}).`;
+
+      methodExplanations.innerHTML =
+        `<div><strong>Parent-based:</strong> ${p.desc}</div>` +
+        (c.predicted ? `<div style="margin-top:8px"><strong>Child-based:</strong> ${c.desc}</div>` : "") +
+        `<div class="tiny" style="margin-top:8px">Final = weighted average (older child = more child-based influence).</div>`;
+
+      resultDiv.dataset.final = finalVal;
+      resultDiv.dataset.parent = p.predicted;
+      resultDiv.dataset.unit = unit;
+      resultDiv.dataset.method = methodDesc;
+      resultDiv.dataset.deviation = deviation ? deviation.toFixed(2) : "";
+
+      // -----------------------------
+      // ML Correction (Option 1): display separately if enabled
+      // -----------------------------
+      if (enableMLBox.checked){
+        const model = trainSimpleLinear();
+        if (model && model.n >= 2){
+          // compute corrected prediction
+          const corrected = model.a + model.b * finalVal;
+
+          // compute deviation for corrected (using same SDS approach if possible)
+          let corrDeviation = null, corrLower = null, corrUpper = null;
+          try{
+            const adultLMS = lookupLMS(216, sex);
+            if (adultLMS){
+              const zc = heightToZ(corrected, adultLMS.L, adultLMS.M, adultLMS.S);
+              corrLower = zToHeight(zc - 1.2, adultLMS.L, adultLMS.M, adultLMS.S);
+              corrUpper = zToHeight(zc + 1.2, adultLMS.L, adultLMS.M, adultLMS.S);
+              corrDeviation = Math.abs(corrUpper - corrected);
+            } else {
+              const median = (sex==="male") ? 176 : 163;
+              const sd = Math.max(4.2, median*0.025);
+              corrDeviation = 1.2 * sd;
+              corrLower = corrected - corrDeviation;
+              corrUpper = corrected + corrDeviation;
+            }
+          } catch(e){
+            corrDeviation = null;
+          }
+
+          // update UI
+          mlCorrected.style.display = 'block';
+          if (corrLower!=null && corrUpper!=null && corrDeviation!=null){
+            mlPred.textContent = `${fromCmTxt(corrected, unit)} (range: ${fromCmTxt(corrLower,unit)} – ${fromCmTxt(corrUpper,unit)}, ±${corrDeviation.toFixed(1)} cm)`;
+          } else {
+            mlPred.textContent = fromCmTxt(corrected, unit);
+          }
+
+          mlStatus.style.display = 'block';
+          mlStatus.innerHTML = `Regression trained on ${model.n} samples — a = ${model.a.toFixed(2)}, b = ${model.b.toFixed(3)}, R²=${model.r2.toFixed(2)}.`;
+          mlInfoText.textContent = 'ML shows an alternate prediction adjusted by past recorded outcomes.';
+        } else {
+          mlCorrected.style.display = 'none';
+          mlStatus.style.display = 'block';
+          mlStatus.textContent = 'Not enough saved real-height records to train regression (need ≥2).';
+        }
+      } else {
+        mlCorrected.style.display = 'none';
+        mlStatus.style.display = 'none';
+      }
+    } // end computeBlend
+
+    // =========================
+    // RECORD SYSTEM
+    // =========================
+    function loadRecords(){ try{ return JSON.parse(localStorage.getItem(STORAGE_KEY)||'[]'); } catch(e){ return []; } }
+    function saveRecords(arr){ localStorage.setItem(STORAGE_KEY, JSON.stringify(arr)); }
+
+    function renderRecords(){
+      const arr = loadRecords();
+      const hide = $('hideHealth').checked;
+      let filtered = hide ? arr.filter(r=>r.healthInfo==='nothing') : arr.slice();
+
+      const s = $('sortBy').value;
+      filtered.sort((a,b)=>{
+        if (s==='date_desc') return b.timestamp - a.timestamp;
+        if (s==='date_asc') return a.timestamp - b.timestamp;
+        if (s==='diff_desc') return Math.abs(b.diffCm) - Math.abs(a.diffCm);
+        if (s==='diff_asc') return Math.abs(a.diffCm) - Math.abs(b.diffCm);
+        return 0;
+      });
+
+      const body = $('recordsBody');
+      body.innerHTML = '';
+      if (!filtered.length){ body.innerHTML = '<tr><td colspan="8" class="muted">No records</td></tr>'; return; }
+
+      filtered.forEach(r=>{
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${new Date(r.timestamp).toLocaleString()}</td>
+          <td>${r.methodDesc}</td>
+          <td>${fromCmTxt(r.finalPred, r.unit)}</td>
+          <td>${fromCmTxt(r.parentPred, r.unit)}</td>
+          <td>${r.realCm?fromCmTxt(r.realCm,r.unit):'—'}</td>
+          <td>${r.diffCm!==null?Math.abs(r.diffCm).toFixed(1)+' cm':'—'}</td>
+          <td>${r.healthInfo}</td>
+          <td>${r.notes||''}</td>`;
+        body.appendChild(tr);
+      });
+    }
+
+    $('saveRecord').addEventListener('click', ()=>{
+      if (!resultDiv.dataset.final){ alert('No prediction to save'); return; }
+      const recs = loadRecords();
+      const unit = resultDiv.dataset.unit || unitSelect.value;
+      const realRaw = $('realHeight').value;
+      const realCm = realRaw ? toCm(realRaw, unit) : null;
+      const diff = realCm ? (realCm - Number(resultDiv.dataset.final)) : null;
+
+      recs.push({
+        timestamp: Date.now(),
+        methodDesc: resultDiv.dataset.method || '',
+        finalPred: Number(resultDiv.dataset.final),
+        parentPred: Number(resultDiv.dataset.parent),
+        deviation: resultDiv.dataset.deviation || '',
+        realCm,
+        diffCm: diff,
+        healthInfo: $('healthInfo').value,
+        notes: '',
+        unit
+      });
+
+      saveRecords(recs);
+      renderRecords();
+      alert('Saved');
+    });
+
+    $('exportCsv').addEventListener('click', ()=>{
+      const arr = loadRecords();
+      if (!arr.length){ alert('No records'); return; }
+
+      const rows = [['timestamp','method','finalPred_cm','parentPred_cm','deviation_cm','real_cm','diff_cm','healthInfo','notes']];
+      arr.forEach(r => rows.push([ new Date(r.timestamp).toISOString(), r.methodDesc, r.finalPred.toFixed(2), r.parentPred.toFixed(2), r.deviation || '', r.realCm ? r.realCm.toFixed(2) : '', r.diffCm!==null ? r.diffCm.toFixed(2) : '', r.healthInfo, (r.notes||'').replace(/\n/g,' ') ]));
+      const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
+      const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = 'height_records.csv'; a.click(); URL.revokeObjectURL(url);
+    });
+
+    $('clearStorage').addEventListener('click', ()=>{ if (confirm('Clear all stored entries?')){ localStorage.removeItem(STORAGE_KEY); renderRecords(); } });
+    $('sortBy').addEventListener('change', renderRecords);
+    $('hideHealth').addEventListener('change', renderRecords);
+
+    predictBtn.addEventListener('click', computeBlend);
+    clearBtn.addEventListener('click', ()=>{ ['fatherHeight','motherHeight','fatherAge','motherAge','childAge','childHeight','weightOverride','realHeight'].forEach(id=>$(id).value=''); resultDiv.style.display='none'; });
+    unitSelect.addEventListener('change', ()=> displayUnits.textContent = unitSelect.value==='metric' ? 'cm' : 'inches (display)' );
+    enableMLBox.addEventListener('change', ()=> { if (resultDiv.style.display !== 'none') computeBlend(); });
+
+    renderRecords();
+    fetchWHO();
+
+  })();
+  </script>
+
+</body>
+</html>
